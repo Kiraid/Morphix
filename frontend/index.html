@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Morphix – Image Format Converter</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- ── NAV ─────────────────────────────────────────────────────────── -->
+  <header class="nav">
+    <div class="nav-inner">
+      <a href="/" class="logo">
+        <span class="logo-icon">⬡</span>
+        <span class="logo-text">Morphix</span>
+      </a>
+      <nav class="nav-links">
+        <div class="nav-dropdown">
+          <button class="nav-btn">Tools <span class="chevron">▾</span></button>
+          <div class="dropdown-menu">
+            <a href="#" class="dropdown-item active">
+              <span class="item-icon">🖼️</span>
+              <div>
+                <div class="item-title">Image Converter</div>
+                <div class="item-sub">Convert between 10+ formats</div>
+              </div>
+            </a>
+            <a href="#" class="dropdown-item coming-soon">
+              <span class="item-icon">📄</span>
+              <div>
+                <div class="item-title">PDF Tools <span class="badge">Soon</span></div>
+                <div class="item-sub">Compress, merge, convert</div>
+              </div>
+            </a>
+            <a href="#" class="dropdown-item coming-soon">
+              <span class="item-icon">🎬</span>
+              <div>
+                <div class="item-title">Video Converter <span class="badge">Soon</span></div>
+                <div class="item-sub">Transcode & trim</div>
+              </div>
+            </a>
+          </div>
+        </div>
+        <a href="#how-it-works" class="nav-link">How it works</a>
+        <a href="https://github.com/faizan-akhtar" target="_blank" class="nav-link">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ── HERO ──────────────────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="hero-bg">
+      <div class="hero-orb hero-orb-1"></div>
+      <div class="hero-orb hero-orb-2"></div>
+      <div class="hero-grid"></div>
+    </div>
+    <div class="hero-inner">
+      <div class="hero-badge">⚡ Serverless · Powered by AWS Lambda + FFmpeg</div>
+      <h1 class="hero-title">
+        Convert images<br />
+        <span class="gradient-text">instantly.</span>
+      </h1>
+      <p class="hero-sub">
+        Drop up to 10 images. Pick a format. Download a ZIP in seconds.<br />
+        No accounts. No watermarks. Files auto-deleted after 24 hours.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── MAIN TOOL ─────────────────────────────────────────────────────── -->
+  <main class="tool-wrapper">
+    <div class="tool-card" id="toolCard">
+
+      <!-- Step 1: Format selector -->
+      <div class="step" id="stepFormat">
+        <div class="step-label"><span class="step-num">1</span> Choose output format</div>
+        <div class="format-grid" id="formatGrid">
+          <!-- filled by JS -->
+        </div>
+      </div>
+
+      <!-- Step 2: Upload zone -->
+      <div class="step" id="stepUpload">
+        <div class="step-label"><span class="step-num">2</span> Add your images <span class="step-hint">up to 10 files · max 25 MB each</span></div>
+
+        <div class="drop-zone" id="dropZone">
+          <div class="drop-icon">📂</div>
+          <p class="drop-primary">Drop images here</p>
+          <p class="drop-or">or</p>
+          <button class="btn-outline" id="browseBtn">Browse files</button>
+          <p class="drop-hint">Ctrl + V to paste from clipboard</p>
+          <input type="file" id="fileInput" multiple accept=".jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif,.avif,.heic,.heif" hidden />
+        </div>
+
+        <!-- file list -->
+        <div class="file-list" id="fileList" hidden></div>
+      </div>
+
+      <!-- Step 3: Convert -->
+      <div class="step step-action" id="stepAction">
+        <div class="convert-summary" id="convertSummary"></div>
+        <button class="btn-primary" id="convertBtn" disabled>
+          <span class="btn-text">Convert files</span>
+          <span class="btn-arrow">→</span>
+        </button>
+      </div>
+
+      <!-- Progress -->
+      <div class="progress-panel" id="progressPanel" hidden>
+        <div class="progress-steps">
+          <div class="prog-step" id="prog-upload">
+            <div class="prog-dot"></div>
+            <span>Uploading to S3</span>
+          </div>
+          <div class="prog-step" id="prog-process">
+            <div class="prog-dot"></div>
+            <span>Converting with FFmpeg</span>
+          </div>
+          <div class="prog-step" id="prog-zip">
+            <div class="prog-dot"></div>
+            <span>Packaging ZIP</span>
+          </div>
+          <div class="prog-step" id="prog-done">
+            <div class="prog-dot"></div>
+            <span>Ready</span>
+          </div>
+        </div>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+        <p class="progress-msg" id="progressMsg">Generating upload URLs…</p>
+      </div>
+
+      <!-- Result -->
+      <div class="result-panel" id="resultPanel" hidden>
+        <div class="result-icon">✅</div>
+        <h2 class="result-title">Conversion complete</h2>
+        <p class="result-sub" id="resultSub"></p>
+        <a class="btn-primary btn-download" id="downloadBtn" href="#" download>
+          ⬇ Download ZIP
+        </a>
+        <button class="btn-ghost" id="resetBtn">Convert more files</button>
+        <p class="result-note">🗑 Files are automatically deleted after 24 hours.</p>
+      </div>
+
+      <!-- Error -->
+      <div class="error-panel" id="errorPanel" hidden>
+        <div class="error-icon">⚠️</div>
+        <p class="error-msg" id="errorMsg"></p>
+        <button class="btn-ghost" id="errorResetBtn">Try again</button>
+      </div>
+
+    </div>
+
+    <!-- accepted formats pill row -->
+    <div class="formats-note">
+      <span class="fn-label">Accepted formats:</span>
+      <span class="fn-pills" id="acceptedPills"></span>
+    </div>
+  </main>
+
+  <!-- ── HOW IT WORKS ───────────────────────────────────────────────────── -->
+  <section class="how-section" id="how-it-works">
+    <div class="how-inner">
+      <h2 class="section-title">How it works</h2>
+      <p class="section-sub">Fully serverless. Your files never touch an app server.</p>
+      <div class="steps-row">
+        <div class="how-step">
+          <div class="how-num">01</div>
+          <div class="how-icon">⬆️</div>
+          <h3>Direct upload to S3</h3>
+          <p>Your browser uploads files directly to S3 via presigned URLs — bypassing any server bottleneck.</p>
+        </div>
+        <div class="how-arrow">→</div>
+        <div class="how-step">
+          <div class="how-num">02</div>
+          <div class="how-icon">⚙️</div>
+          <h3>Lambda + FFmpeg</h3>
+          <p>An AWS Lambda (Go runtime, Docker) converts each image in parallel goroutines using FFmpeg.</p>
+        </div>
+        <div class="how-arrow">→</div>
+        <div class="how-step">
+          <div class="how-num">03</div>
+          <div class="how-icon">📡</div>
+          <h3>Real-time notification</h3>
+          <p>AWS IoT Core pushes an MQTT event to your browser the instant the ZIP is ready.</p>
+        </div>
+        <div class="how-arrow">→</div>
+        <div class="how-step">
+          <div class="how-num">04</div>
+          <div class="how-icon">⬇️</div>
+          <h3>Download & gone</h3>
+          <p>A presigned download URL is delivered. Files are wiped from S3 after 24 hours.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── TECH STACK ────────────────────────────────────────────────────── -->
+  <section class="stack-section">
+    <div class="stack-inner">
+      <h2 class="section-title">Built on AWS</h2>
+      <div class="stack-grid">
+        <div class="stack-card"><span class="sc-icon">☁️</span><div class="sc-name">S3</div><div class="sc-desc">Storage + lifecycle</div></div>
+        <div class="stack-card"><span class="sc-icon">🌐</span><div class="sc-name">CloudFront</div><div class="sc-desc">CDN + OAC</div></div>
+        <div class="stack-card"><span class="sc-icon">λ</span><div class="sc-name">Lambda</div><div class="sc-desc">Go · Docker · ECR</div></div>
+        <div class="stack-card"><span class="sc-icon">🔗</span><div class="sc-name">API Gateway</div><div class="sc-desc">REST presign API</div></div>
+        <div class="stack-card"><span class="sc-icon">📨</span><div class="sc-name">SQS</div><div class="sc-desc">Decoupled queue</div></div>
+        <div class="stack-card"><span class="sc-icon">📡</span><div class="sc-name">IoT Core</div><div class="sc-desc">MQTT push</div></div>
+        <div class="stack-card"><span class="sc-icon">🗄️</span><div class="sc-name">DynamoDB</div><div class="sc-desc">Job tracking</div></div>
+        <div class="stack-card"><span class="sc-icon">🏗️</span><div class="sc-name">Terraform</div><div class="sc-desc">Full IaC</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FOOTER ────────────────────────────────────────────────────────── -->
+  <footer class="footer">
+    <div class="footer-inner">
+      <div class="footer-left">
+        <a href="/" class="logo">
+          <span class="logo-icon">⬡</span>
+          <span class="logo-text">Morphix</span>
+        </a>
+        <p class="footer-tagline">Serverless image conversion at the edge.</p>
+      </div>
+      <div class="footer-right">
+        <a href="https://github.com/faizan-akhtar" target="_blank" class="footer-link">GitHub</a>
+        <a href="#how-it-works" class="footer-link">Architecture</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>Built with Go · AWS · Terraform · FFmpeg &nbsp;·&nbsp; Files deleted after 24 h &nbsp;·&nbsp; No tracking</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

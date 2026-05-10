@@ -1,0 +1,186 @@
+# name: Deploy Morphix
+# on:
+#   push:
+#     branches: [main]
+#     paths:
+#       - 'backend/**'
+#       - 'terraform/**' 
+#       - 'frontend/**'
+
+# jobs:
+#   detect-changes:
+#     runs-on: ubuntu-latest
+#     outputs:
+#       presign-changed: ${{ steps.changes.outputs.presign }}
+#       iot-auth-changed: ${{ steps.changes.outputs.iot-auth }}
+#       processor-changed: ${{ steps.changes.outputs.processor }}
+#       terraform-changed: ${{ steps.changes.outputs.terraform }}
+#       frontend-changed: ${{ steps.changes.outputs.frontend }}
+    
+#     steps:
+#       - uses: actions/checkout@v3
+#       - uses: dorny/paths-filter@v2
+#         id: changes
+#         with:
+#           filters: |
+#             backend/cmd/presign:
+#               - 'backend/cmd/presign/**'
+#             backend/cmd/iot-auth:
+#               - 'backend/cmd/iot-auth/**'
+#             backend/cmd/processor:
+#               - 'backend/cmd/processor/**'
+#             terraform:
+#               - 'terraform/**'
+#             frontend:
+#               - 'frontend/**'
+
+#   build-lambdas:
+#     needs: detect-changes
+#     if: needs.detect-changes.outputs.presign-changed == 'true' || needs.detect-changes.outputs.iot-auth-changed == 'true'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v3
+#       - uses: actions/setup-go@v4
+#         with:
+#           go-version: '1.22'
+      
+#       - name: Build Presign Lambda
+#         if: needs.detect-changes.outputs.presign-changed == 'true'
+#         run: |
+#           mkdir -p dist/presign
+#           GOOS=linux GOARCH=amd64 go build -o dist/presign/bootstrap ./cmd/presign
+#           cd dist/presign && zip -r presign.zip bootstrap
+      
+#       - name: Build IoT Auth Lambda  
+#         if: needs.detect-changes.outputs.iot-auth-changed == 'true'
+#         run: |
+#           mkdir -p dist/iot-auth
+#           GOOS=linux GOARCH=amd64 go build -o dist/iot-auth/bootstrap ./cmd/iot-auth
+#           cd dist/iot-auth && zip -r iot-auth.zip bootstrap
+      
+#       - name: Upload Lambda ZIPs
+#         uses: actions/upload-artifact@v3
+#         with:
+#           name: lambda-zips
+#           path: dist/
+
+#   build-image:
+#     needs: detect-changes
+#     if: needs.detect-changes.outputs.processor-changed == 'true'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v3
+#       - uses: docker/setup-buildx-action@v2
+      
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v2
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: us-east-1
+      
+#       - name: Login to ECR
+#         uses: aws-actions/amazon-ecr-login@v1
+      
+#       - name: Build and Push
+#         env:
+#           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
+#           ECR_REPO: ${{ secrets.ECR_REPOSITORY }}
+#         run: |
+#           docker build -t $ECR_REGISTRY/$ECR_REPO:${{ github.sha }} ./backend
+#           docker push $ECR_REGISTRY/$ECR_REPO:${{ github.sha }}
+          
+#           docker tag $ECR_REGISTRY/$ECR_REPO:${{ github.sha }} $ECR_REGISTRY/$ECR_REPO:latest
+#           docker push $ECR_REGISTRY/$ECR_REPO:latest
+
+#   terraform-plan:
+#     needs: [detect-changes, build-lambdas, build-image]
+#     if: needs.detect-changes.outputs.terraform-changed == 'true' || needs.detect-changes.outputs.presign-changed == 'true' || needs.detect-changes.outputs.iot-auth-changed == 'true' || needs.detect-changes.outputs.processor-changed == 'true'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v3
+#       - uses: actions/setup-go@v4
+#         with:
+#           go-version: '1.22'
+      
+#       - name: Download Lambda ZIPs
+#         if: needs.detect-changes.outputs.presign-changed == 'true' || needs.detect-changes.outputs.iot-auth-changed == 'true'
+#         uses: actions/download-artifact@v3
+#         with:
+#           name: lambda-zips
+#           path: terraform/dist/
+      
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v2
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: us-east-1
+      
+#       - name: Terraform Plan
+#         run: |
+#           cd terraform
+#           terraform init
+#           IMAGE_TAG=${{ needs.detect-changes.outputs.processor-changed == 'true' && github.sha || 'latest' }
+#           terraform plan -var="processor_image_tag=$IMAGE_TAG" -out=tfplan
+      
+#       - name: Plan Summary
+#         run: |
+#           cd terraform
+#           echo "## 📋 Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
+#           terraform show -json tfplan | jq -r '.resource_changes | length' | xargs -I {} echo "- {} resources will change" >> $GITHUB_STEP_SUMMARY
+      
+#       - name: Upload Plan
+#         uses: actions/upload-artifact@v3
+#         with:
+#           name: terraform-plan
+#           path: terraform/tfplan
+
+#   terraform-apply:
+#     needs: terraform-plan
+#     runs-on: ubuntu-latest
+#     environment: production
+#     steps:
+#       - uses: actions/checkout@v3
+#       - uses: aws-actions/configure-aws-credentials@v2
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: us-east-1
+      
+#       - name: Download Plan
+#         uses: actions/download-artifact@v3
+#         with:
+#           name: terraform-plan
+#           path: terraform/
+      
+#       - name: Terraform Apply
+#         run: |
+#           cd terraform
+#           terraform apply tfplan
+
+#   deploy-frontend:
+#     needs: terraform-apply
+#     if: needs.detect-changes.outputs.frontend-changed == 'true'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v3
+      
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v2
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: us-east-1
+      
+#       - name: Upload to S3
+#         env:
+#           S3_BUCKET: ${{ secrets.S3_BUCKET }}
+#         run: |
+#           aws s3 sync frontend/ s3://$S3_BUCKET/ --delete
+      
+#       - name: CloudFront Invalidation
+#         env:
+#           CF_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
+#         run: |
+#           aws cloudfront create-invalidation --distribution-id $CF_DISTRIBUTION_ID --paths "/*"
