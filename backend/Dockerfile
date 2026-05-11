@@ -19,7 +19,6 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 FROM public.ecr.aws/lambda/provided:al2023
 
 # Install FFmpeg with codec support
-# Using static build for smaller footprint and no dependency issues
 RUN dnf install -y tar xz && \
     curl -L https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
     -o /tmp/ffmpeg.tar.xz && \

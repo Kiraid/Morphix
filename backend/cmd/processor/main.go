@@ -54,18 +54,10 @@ func init() {
 	})
 }
 
-// ── TYPES ──────────────────────────────────────────────────────────────
-type S3EventMessage struct {
-	RequestID    string   `json:"request_id"`
-	TargetFormat string   `json:"target_format"`
-	FileCount    int      `json:"file_count"`
-	FileNames    []string `json:"file_names"`
-	Bucket       string   `json:"bucket"`
-	Prefix       string   `json:"prefix"` // uploads/{request_id}/
-}
 
 type ConversionResult struct {
-	Filename string
+	Filename string 
+	OutName  string 
 	Data     []byte
 	Err      error
 }
@@ -78,11 +70,10 @@ type IoTMessage struct {
 	Message     string `json:"message,omitempty"`
 }
 
-// ── HANDLER ────────────────────────────────────────────────────────────
+
 func handler(ctx context.Context, sqsEvent events.SQSEvent) error {
 	for _, record := range sqsEvent.Records {
 		if err := processRecord(ctx, record); err != nil {
-			// Return error so SQS can retry (up to DLQ maxReceiveCount)
 			log.Printf("ERROR processing record %s: %v", record.MessageId, err)
 			return err
 		}
@@ -91,8 +82,6 @@ func handler(ctx context.Context, sqsEvent events.SQSEvent) error {
 }
 
 func processRecord(ctx context.Context, record events.SQSMessage) error {
-	// SQS message body is the S3 event notification JSON
-	// We parse the job metadata from DynamoDB using the request_id in the S3 key
 	var s3Notification struct {
 		Records []struct {
 			S3 struct {
@@ -112,7 +101,7 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		return nil
 	}
 
-	// Extract request_id from key: uploads/{request_id}/filename
+
 	key := s3Notification.Records[0].S3.Object.Key
 	parts := strings.Split(key, "/")
 	if len(parts) < 3 || parts[0] != "uploads" {
@@ -127,7 +116,7 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 		return fmt.Errorf("failed to load job %s: %w", requestID, err)
 	}
 
-	// Guard: check if already processing (avoid duplicate SQS deliveries)
+	// Guard: avoid duplicate SQS deliveries 
 	if job["status"] == "PROCESSING" || job["status"] == "DONE" || job["status"] == "ERROR" {
 		log.Printf("job %s already in state %s, skipping", requestID, job["status"])
 		return nil
@@ -137,61 +126,85 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 	fileCount := int(mustParseInt(job["file_count"]))
 	fileNames := strings.Split(job["file_names"], ",")
 
-	// Check all files are present in S3 before processing
+	// Check all files are present in S3 before processing.
 	present, err := countFilesInPrefix(ctx, fmt.Sprintf("uploads/%s/", requestID))
 	if err != nil {
 		return fmt.Errorf("failed to list S3 prefix: %w", err)
 	}
 	if present < fileCount {
-		// Not all files uploaded yet — SQS will retry via visibility timeout
 		log.Printf("job %s: expected %d files, found %d — will retry", requestID, fileCount, present)
 		return fmt.Errorf("incomplete upload: %d/%d files present", present, fileCount)
 	}
 
-	// Update status → PROCESSING
+	// Change the job status to PROCESSING
 	if err := updateJobStatus(ctx, requestID, "PROCESSING", ""); err != nil {
 		return err
 	}
 	publishIoT(ctx, requestID, IoTMessage{Status: "PROCESSING", RequestID: requestID})
 
-	// Download + convert all images in parallel goroutines
+	// Convert all images in parallel goroutines
 	results := convertImages(ctx, requestID, fileNames, targetFormat)
-
-	// Check for any conversion errors
 	for _, r := range results {
 		if r.Err != nil {
 			log.Printf("conversion error for %s: %v", r.Filename, r.Err)
 			updateJobStatus(ctx, requestID, "ERROR", r.Err.Error())
-			publishIoT(ctx, requestID, IoTMessage{Status: "ERROR", RequestID: requestID, Message: fmt.Sprintf("Failed to convert %s", r.Filename)})
+			publishIoT(ctx, requestID, IoTMessage{
+				Status:    "ERROR",
+				RequestID: requestID,
+				Message:   fmt.Sprintf("Failed to convert %s", r.Filename),
+			})
 			return r.Err
 		}
 	}
 
-	// Zip all converted files
+	// SINGLE FILE: upload directly
+	if fileCount == 1 {
+		r := results[0]
+		outputKey := fmt.Sprintf("converted/%s/%s", requestID, r.OutName)
+
+		if err := uploadToS3(ctx, outputKey, r.Data, getContentType(r.OutName)); err != nil {
+			updateJobStatus(ctx, requestID, "ERROR", err.Error())
+			return fmt.Errorf("failed to upload converted file: %w", err)
+		}
+
+		downloadURL, err := presignDownloadURL(ctx, outputKey, 24*time.Hour)
+		if err != nil {
+			return fmt.Errorf("failed to presign download URL: %w", err)
+		}
+
+		updateJobStatus(ctx, requestID, "DONE", downloadURL)
+		publishIoT(ctx, requestID, IoTMessage{
+			Status:      "DONE",
+			RequestID:   requestID,
+			DownloadURL: downloadURL,
+			FileCount:   1,
+		})
+
+		log.Printf("job %s completed (single file): %s", requestID, outputKey)
+		return nil
+	}
+
+	// MULTIPLE FILES: build ZIP 
 	publishIoT(ctx, requestID, IoTMessage{Status: "ZIPPING", RequestID: requestID})
+
 	zipData, err := buildZip(results)
 	if err != nil {
 		updateJobStatus(ctx, requestID, "ERROR", err.Error())
 		return fmt.Errorf("failed to build ZIP: %w", err)
 	}
 
-	// Upload ZIP to S3
 	zipKey := fmt.Sprintf("converted/%s/images_%s.zip", requestID, strings.ToLower(targetFormat))
 	if err := uploadToS3(ctx, zipKey, zipData, "application/zip"); err != nil {
 		updateJobStatus(ctx, requestID, "ERROR", err.Error())
 		return fmt.Errorf("failed to upload ZIP: %w", err)
 	}
 
-	// Generate presigned GET URL (24h expiry)
 	downloadURL, err := presignDownloadURL(ctx, zipKey, 24*time.Hour)
 	if err != nil {
 		return fmt.Errorf("failed to presign download URL: %w", err)
 	}
 
-	// Update job to DONE
 	updateJobStatus(ctx, requestID, "DONE", downloadURL)
-
-	// Notify frontend via IoT Core
 	publishIoT(ctx, requestID, IoTMessage{
 		Status:      "DONE",
 		RequestID:   requestID,
@@ -203,12 +216,11 @@ func processRecord(ctx context.Context, record events.SQSMessage) error {
 	return nil
 }
 
-// ── IMAGE CONVERSION ───────────────────────────────────────────────────
+
 func convertImages(ctx context.Context, requestID string, fileNames []string, targetFormat string) []ConversionResult {
 	results := make([]ConversionResult, len(fileNames))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4) // max 4 concurrent conversions
-
+	sem := make(chan struct{}, 4) 
 	for i, name := range fileNames {
 		wg.Add(1)
 		go func(idx int, filename string) {
@@ -229,7 +241,7 @@ func convertImages(ctx context.Context, requestID string, fileNames []string, ta
 				return
 			}
 
-			results[idx] = ConversionResult{Filename: outName, Data: converted}
+			results[idx] = ConversionResult{Filename: filename, OutName: outName, Data: converted}
 		}(i, name)
 	}
 
@@ -238,12 +250,10 @@ func convertImages(ctx context.Context, requestID string, fileNames []string, ta
 }
 
 // convertWithFFmpeg shells out to ffmpeg to convert image data.
-// Input is piped via stdin, output captured from stdout.
 func convertWithFFmpeg(data []byte, originalName, targetFormat string) ([]byte, string, error) {
-	// Detect input format from file extension
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(originalName), "."))
 	if ext == "heic" || ext == "heif" {
-		ext = "heic" // ffmpeg uses heic for both
+		ext = "heic"
 	}
 
 	outExt := strings.ToLower(targetFormat)
@@ -251,13 +261,14 @@ func convertWithFFmpeg(data []byte, originalName, targetFormat string) ([]byte, 
 		outExt = "jpg"
 	}
 
-	// Output filename: strip original ext, add new one
 	base := strings.TrimSuffix(originalName, filepath.Ext(originalName))
 	outName := fmt.Sprintf("%s.%s", base, outExt)
 
-	// ffmpeg flags per format
-	args := buildFFmpegArgs(ext, outExt)
+	if outExt == "avif" {
+		return convertAVIFViaTemp(data, originalName, outName)
+	}
 
+	args := buildFFmpegArgs(ext, outExt)
 	cmd := exec.Command("ffmpeg", args...)
 	cmd.Stdin = bytes.NewReader(data)
 
@@ -272,9 +283,41 @@ func convertWithFFmpeg(data []byte, originalName, targetFormat string) ([]byte, 
 	return stdout.Bytes(), outName, nil
 }
 
+
+func convertAVIFViaTemp(data []byte, originalName, outName string) ([]byte, string, error) {
+	uid := fmt.Sprintf("%d", time.Now().UnixNano())
+	inPath := fmt.Sprintf("/tmp/in_%s_%s", uid, originalName)
+	outPath := fmt.Sprintf("/tmp/out_%s_%s", uid, outName)
+	defer os.Remove(inPath)
+	defer os.Remove(outPath)
+
+	if err := os.WriteFile(inPath, data, 0600); err != nil {
+		return nil, "", fmt.Errorf("failed to write temp input: %w", err)
+	}
+
+	cmd := exec.Command("ffmpeg",
+		"-hide_banner", "-loglevel", "error",
+		"-i", inPath,
+		"-c:v", "libaom-av1", "-crf", "30", "-b:v", "0",
+		"-f", "avif", outPath,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, "", fmt.Errorf("ffmpeg avif error: %v — stderr: %s", err, stderr.String())
+	}
+
+	converted, err := os.ReadFile(outPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read avif output: %w", err)
+	}
+
+	return converted, outName, nil
+}
+
 func buildFFmpegArgs(inExt, outExt string) []string {
-	// -i pipe:0  → read from stdin
-	// pipe:1     → write to stdout
 	base := []string{
 		"-hide_banner", "-loglevel", "error",
 		"-i", "pipe:0",
@@ -282,19 +325,15 @@ func buildFFmpegArgs(inExt, outExt string) []string {
 
 	switch outExt {
 	case "jpg", "jpeg":
-		base = append(base, "-q:v", "2") // high quality JPEG
+		base = append(base, "-q:v", "2")
 	case "webp":
 		base = append(base, "-q:v", "80")
-	case "avif":
-		base = append(base, "-c:v", "libaom-av1", "-crf", "30", "-b:v", "0")
 	case "png":
 		base = append(base, "-compression_level", "6")
 	case "gif":
-		// palette for quality GIF
 		base = append(base, "-vf", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse")
 	}
 
-	// Output format + pipe stdout
 	base = append(base, "-f", ffmpegFormat(outExt), "pipe:1")
 	return base
 }
@@ -305,7 +344,6 @@ func ffmpegFormat(ext string) string {
 		"png": "apng", "webp": "webp",
 		"gif": "gif", "bmp": "bmp",
 		"tiff": "tiff", "tif": "tiff",
-		"avif": "avif",
 	}
 	if f, ok := m[ext]; ok {
 		return f
@@ -313,18 +351,37 @@ func ffmpegFormat(ext string) string {
 	return ext
 }
 
-// ── ZIP BUILDER ────────────────────────────────────────────────────────
+func getContentType(filename string) string {
+	m := map[string]string{
+		"jpg":  "image/jpeg",
+		"jpeg": "image/jpeg",
+		"png":  "image/png",
+		"gif":  "image/gif",
+		"webp": "image/webp",
+		"avif": "image/avif",
+		"bmp":  "image/bmp",
+		"tiff": "image/tiff",
+		"tif":  "image/tiff",
+	}
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filename), "."))
+	if ct, ok := m[ext]; ok {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
+
 func buildZip(results []ConversionResult) ([]byte, error) {
 	var buf bytes.Buffer
 	w := zip.NewWriter(&buf)
 
 	for _, r := range results {
-		f, err := w.Create(r.Filename)
+		f, err := w.Create(r.OutName) // OutName has the correct converted extension
 		if err != nil {
-			return nil, fmt.Errorf("zip create %s: %w", r.Filename, err)
+			return nil, fmt.Errorf("zip create %s: %w", r.OutName, err)
 		}
 		if _, err := f.Write(r.Data); err != nil {
-			return nil, fmt.Errorf("zip write %s: %w", r.Filename, err)
+			return nil, fmt.Errorf("zip write %s: %w", r.OutName, err)
 		}
 	}
 
@@ -334,7 +391,7 @@ func buildZip(results []ConversionResult) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// ── S3 HELPERS ─────────────────────────────────────────────────────────
+// s3 helpers
 func downloadFromS3(ctx context.Context, key string) ([]byte, error) {
 	out, err := s3Client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(bucketName),
@@ -379,7 +436,7 @@ func countFilesInPrefix(ctx context.Context, prefix string) (int, error) {
 	return int(out.KeyCount), nil
 }
 
-// ── DYNAMODB HELPERS ───────────────────────────────────────────────────
+// DYNAMODB HELPERS 
 func loadJob(ctx context.Context, requestID string) (map[string]string, error) {
 	out, err := ddbClient.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(ddbTable),
@@ -431,7 +488,7 @@ func updateJobStatus(ctx context.Context, requestID, status, extra string) error
 	return err
 }
 
-// ── IOT CORE ──────────────────────────────────────────────────────────
+// IOT CORE 
 func publishIoT(ctx context.Context, requestID string, msg IoTMessage) {
 	payload, err := json.Marshal(msg)
 	if err != nil {
@@ -450,11 +507,7 @@ func publishIoT(ctx context.Context, requestID string, msg IoTMessage) {
 	}
 }
 
-// ── STATUS HANDLER (for polling fallback) ─────────────────────────────
-// This is a separate Lambda (or same with API GW routing) at GET /status/{job_id}
-// For simplicity, implemented in the same binary but routed by API GW
-
-// ── UTILS ─────────────────────────────────────────────────────────────
+// UTILS 
 func mustParseInt(s string) int64 {
 	var n int64
 	fmt.Sscanf(s, "%d", &n)

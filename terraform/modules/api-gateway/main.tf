@@ -6,7 +6,7 @@ variable "iot_auth_lambda_name"   {}
 variable "aws_region"             {}
 variable "tags"                   { type = map(string) }
 
-# ── HTTP API ─────────────────────────────────────────────────────────────
+# HTTP API 
 resource "aws_apigatewayv2_api" "main" {
   name          = "${var.name_prefix}-api"
   protocol_type = "HTTP"
@@ -15,7 +15,7 @@ resource "aws_apigatewayv2_api" "main" {
   
 }
 
-# ── CORS CONFIGURATION ───────────────────────────────────────────────────
+# CORS CONFIGURATION 
 resource "aws_apigatewayv2_cors_configuration" "main" {
   api_id = aws_apigatewayv2_api.main.id
 
@@ -32,7 +32,7 @@ resource "aws_apigatewayv2_cors_configuration" "main" {
   }
 }
 
-# ── PRESIGN INTEGRATION ─────────────────────────────────────────────────
+# PRESIGN INTEGRATION 
 resource "aws_apigatewayv2_integration" "presign" {
   api_id           = aws_apigatewayv2_api.main.id
   integration_type = "AWS_PROXY"
@@ -46,7 +46,7 @@ resource "aws_apigatewayv2_route" "presign" {
   target    = "integrations/${aws_apigatewayv2_integration.presign.id}"
 }
 
-# ── IOT AUTH INTEGRATION ─────────────────────────────────────────────────
+# IOT AUTH INTEGRATION 
 resource "aws_apigatewayv2_integration" "iot_auth" {
   api_id           = aws_apigatewayv2_api.main.id
   integration_type = "AWS_PROXY"
@@ -60,7 +60,7 @@ resource "aws_apigatewayv2_route" "iot_auth" {
   target    = "integrations/${aws_apigatewayv2_integration.iot_auth.id}"
 }
 
-# ── DEFAULT ROUTE (404) ─────────────────────────────────────────────────
+# DEFAULT ROUTE (404) 
 resource "aws_apigatewayv2_route" "default" {
   api_id    = aws_apigatewayv2_api.main.id
   route_key = "$default"
@@ -73,7 +73,7 @@ resource "aws_apigatewayv2_integration" "default" {
   timeout_milliseconds = 5000
 }
 
-# ── STAGE ───────────────────────────────────────────────────────────────
+# STAGE 
 resource "aws_apigatewayv2_stage" "prod" {
   api_id      = aws_apigatewayv2_api.main.id
   name       = "prod"
@@ -99,7 +99,7 @@ resource "aws_apigatewayv2_stage" "prod" {
   }
 }
 
-# ── LAMBDA PERMISSIONS ───────────────────────────────────────────────────
+# LAMBDA PERMISSIONS 
 resource "aws_lambda_permission" "presign_api" {
   statement_id  = "AllowAPIGW-POST-presign"
   action        = "lambda:InvokeFunction"
@@ -116,14 +116,14 @@ resource "aws_lambda_permission" "iot_auth_api" {
   source_arn    = "${aws_apigatewayv2_api.main.execution_arn}/*/*/*"
 }
 
-# ── CLOUDWATCH LOGS ─────────────────────────────────────────────────────
+# CLOUDWATCH LOGS 
 resource "aws_cloudwatch_log_group" "api_gw" {
   name              = "/aws/apigateway/${var.name_prefix}"
   retention_in_days = 7
   tags              = var.tags
 }
 
-# ── OUTPUTS ───────────────────────────────────────────────────────────
+# OUTPUTS 
 output "api_url" {
   value = "${aws_apigatewayv2_stage.prod.invoke_url}"
 }

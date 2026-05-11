@@ -3,7 +3,7 @@ variable "tags"        { type = map(string) }
 
 resource "aws_dynamodb_table" "jobs" {
   name         = "${var.name_prefix}-jobs"
-  billing_mode = "PAY_PER_REQUEST" # on-demand — perfect for variable load
+  billing_mode = "PAY_PER_REQUEST" 
   hash_key     = "request_id"
 
   attribute {
@@ -11,7 +11,7 @@ resource "aws_dynamodb_table" "jobs" {
     type = "S"
   }
 
-  # TTL: DynamoDB auto-deletes expired job records (set by Lambda to now+24h)
+  # TTL: DynamoDB auto-deletes expired job record
   ttl {
     attribute_name = "ttl"
     enabled        = true

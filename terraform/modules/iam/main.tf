@@ -12,7 +12,7 @@ locals {
   region     = data.aws_region.current.name
 }
 
-# ── PRESIGN LAMBDA ROLE ───────────────────────────────────────────────
+# PRESIGN LAMBDA ROLE
 resource "aws_iam_role" "presign_lambda" {
   name = "${var.name_prefix}-presign-role"
   tags = var.tags
@@ -34,31 +34,26 @@ resource "aws_iam_role_policy" "presign_lambda" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # CloudWatch Logs
       {
         Effect = "Allow"
         Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/*"
       },
-      # S3 presigned URL generation (PutObject only on uploads/)
       {
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = "arn:aws:s3:::${var.bucket_name}/uploads/*"
       },
-      # DynamoDB job tracking
       {
         Effect   = "Allow"
         Action   = ["dynamodb:PutItem", "dynamodb:GetItem", "dynamodb:UpdateItem"]
         Resource = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.ddb_table}"
       },
-      # IoT Core (for iot-auth Lambda to sign WSS URLs)
       {
         Effect   = "Allow"
         Action   = ["iot:Connect", "iot:Subscribe", "iot:Receive"]
         Resource = "*"
       },
-      # IoT DescribeEndpoint for signed URL generation
       {
         Effect   = "Allow"
         Action   = ["iot:DescribeEndpoint"]
@@ -68,7 +63,7 @@ resource "aws_iam_role_policy" "presign_lambda" {
   })
 }
 
-# ── PROCESSOR LAMBDA ROLE ─────────────────────────────────────────────
+# PROCESSOR LAMBDA ROLE
 resource "aws_iam_role" "processor_lambda" {
   name = "${var.name_prefix}-processor-role"
   tags = var.tags
@@ -90,13 +85,11 @@ resource "aws_iam_role_policy" "processor_lambda" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # CloudWatch Logs
       {
         Effect = "Allow"
         Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "arn:aws:logs:${local.region}:${local.account_id}:log-group:/aws/lambda/*"
       },
-      # S3: read uploads, write converted
       {
         Effect   = "Allow"
         Action   = ["s3:GetObject", "s3:ListBucket"]
@@ -110,25 +103,21 @@ resource "aws_iam_role_policy" "processor_lambda" {
         Action   = ["s3:PutObject"]
         Resource = "arn:aws:s3:::${var.bucket_name}/converted/*"
       },
-      # SQS: read messages
       {
         Effect   = "Allow"
         Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
         Resource = "arn:aws:sqs:${local.region}:${local.account_id}:*"
       },
-      # DynamoDB: update job status
       {
         Effect   = "Allow"
         Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
         Resource = "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.ddb_table}"
       },
-      # IoT Core: publish to job topics
       {
         Effect   = "Allow"
         Action   = ["iot:Publish"]
         Resource = "arn:aws:iot:${local.region}:${local.account_id}:topic/${var.iot_topic}"
       },
-      # ECR pull (for Docker image Lambda)
       {
         Effect = "Allow"
         Action = [

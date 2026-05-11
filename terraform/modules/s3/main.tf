@@ -29,13 +29,13 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "main" {
   }
 }
 
-# Versioning disabled — we don't need it for ephemeral files
+# Versioning disabled 
 resource "aws_s3_bucket_versioning" "main" {
   bucket = aws_s3_bucket.main.id
   versioning_configuration { status = "Disabled" }
 }
 
-# ── LIFECYCLE: auto-delete uploads and converted files ────────────────
+#LIFECYCLE: auto-delete uploads and converted files
 resource "aws_s3_bucket_lifecycle_configuration" "main" {
   bucket = aws_s3_bucket.main.id
 
@@ -54,26 +54,25 @@ resource "aws_s3_bucket_lifecycle_configuration" "main" {
   }
 }
 
-# ── CORS: allow presigned PUT uploads from the CloudFront domain ──────
+#  CORS: allow presigned PUT uploads from the CloudFront domain
 resource "aws_s3_bucket_cors_configuration" "main" {
   bucket = aws_s3_bucket.main.id
 
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["PUT", "GET", "HEAD"]
-    # In production, restrict to your CloudFront domain
+
     allowed_origins = ["*"]
     max_age_seconds = 3600
   }
 }
 
-# ── BUCKET POLICY: allow CloudFront OAC + Lambda role ─────────────────
+# BUCKET POLICY: allow CloudFront OAC + Lambda role
 resource "aws_s3_bucket_policy" "main" {
   bucket = aws_s3_bucket.main.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # CloudFront OAC can GET frontend assets
       {
         Sid       = "AllowCloudFrontServicePrincipal"
         Effect    = "Allow"
@@ -91,27 +90,6 @@ resource "aws_s3_bucket_policy" "main" {
   depends_on = [aws_s3_bucket_public_access_block.main]
 }
 
-# Upload frontend files
-resource "aws_s3_object" "index_html" {
-  bucket = aws_s3_bucket.main.id
-  key    = "index.html"
-  source = "${path.module}/../../frontend/index.html"
-  content_type = "text/html"
-}
- 
-resource "aws_s3_object" "app_js" {
-  bucket = aws_s3_bucket.main.id
-  key    = "app.js"
-  source = "${path.module}/../../frontend/app.js"
-  content_type = "application/javascript"
-}
- 
-resource "aws_s3_object" "style_css" {
-  bucket = aws_s3_bucket.main.id
-  key    = "style.css"
-  source = "${path.module}/../../frontend/style.css"
-  content_type = "text/css"
-}
 
 output "bucket_id"               { value = aws_s3_bucket.main.id }
 output "bucket_arn"              { value = aws_s3_bucket.main.arn }

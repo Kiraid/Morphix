@@ -11,9 +11,7 @@ variable "ecr_image_uri"        {}
 variable "aws_region"           {}
 variable "tags"                 { type = map(string) }
 
-# ── PRESIGN LAMBDA (Go binary, zip deployment) ────────────────────────
-# Build with: GOOS=linux GOARCH=amd64 go build -o bootstrap ./cmd/presign && zip presign.zip bootstrap
-
+# PRESIGN LAMBDA (Go binary, zip deployment)
 data "archive_file" "presign" {
   type        = "zip"
   source_file = "${path.module}/../../../../backend/dist/presign/bootstrap"
@@ -41,14 +39,14 @@ resource "aws_lambda_function" "presign" {
   tags = var.tags
 }
 
-# ── PROCESSOR LAMBDA (Docker image from ECR) ─────────────────────────
+# PROCESSOR LAMBDA (Docker image from ECR)
 resource "aws_lambda_function" "processor" {
   function_name = "${var.name_prefix}-processor"
   role          = var.processor_role_arn
   package_type  = "Image"
   image_uri     = var.ecr_image_uri
-  timeout       = 300  # 5 minutes for large batches
-  memory_size   = 3008 # max memory for CPU-intensive FFmpeg
+  timeout       = 300  
+  memory_size   = 3008 
 
   environment {
     variables = {
@@ -59,22 +57,22 @@ resource "aws_lambda_function" "processor" {
     }
   }
 
-  # Ephemeral storage for temp files during processing
-  ephemeral_storage { size = 2048 } # 2 GB /tmp
+  # Ephemeral storage for temp files 
+  ephemeral_storage { size = 2048 } 
 
   tags = var.tags
 }
 
-# ── SQS → Processor trigger ───────────────────────────────────────────
+# SQS → Processor trigger
 resource "aws_lambda_event_source_mapping" "sqs_trigger" {
   event_source_arn = var.sqs_queue_arn
   function_name    = aws_lambda_function.processor.arn
-  batch_size       = 1  # Process one job at a time
+  batch_size       = 1  
 
   function_response_types = ["ReportBatchItemFailures"]
 }
 
-# ── IOT AUTH LAMBDA (returns signed WSS URL) ──────────────────────────
+# IOT AUTH LAMBDA 
 data "archive_file" "iot_auth" {
   type        = "zip"
   source_file = "${path.module}/../../../../backend/dist/iot-auth/bootstrap"
@@ -101,7 +99,7 @@ resource "aws_lambda_function" "iot_auth" {
   tags = var.tags
 }
 
-# ── CLOUDWATCH LOG GROUPS ─────────────────────────────────────────────
+# CLOUDWATCH LOG GROUPS 
 resource "aws_cloudwatch_log_group" "presign" {
   name              = "/aws/lambda/${aws_lambda_function.presign.function_name}"
   retention_in_days = 7
@@ -120,7 +118,7 @@ resource "aws_cloudwatch_log_group" "iot_auth" {
   tags              = var.tags
 }
 
-# ── OUTPUTS ───────────────────────────────────────────────────────────
+# OUTPUTS 
 output "presign_lambda_arn"      { value = aws_lambda_function.presign.arn }
 output "presign_lambda_name"     { value = aws_lambda_function.presign.function_name }
 output "processor_lambda_arn"    { value = aws_lambda_function.processor.arn }

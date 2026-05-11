@@ -122,7 +122,7 @@ module "iot" {
   tags        = local.tags
 }
 
-# ── S3 → SQS EVENT NOTIFICATION
+#  S3 → SQS EVENT NOTIFICATION
 resource "aws_s3_bucket_notification" "upload_notification" {
   bucket = module.s3.bucket_id
 
@@ -133,4 +133,29 @@ resource "aws_s3_bucket_notification" "upload_notification" {
   }
 
   depends_on = [module.sqs]
+}
+
+# BUDGETS ALARM
+resource "aws_budgets_budget" "monthly_limit" {
+  name         = "${local.name_prefix}-monthly-budget"
+  budget_type  = "COST"
+  time_unit    = "MONTHLY"
+  limit_amount = "5"
+  limit_unit   = "USD"
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = "80"
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = ["faizan.akhtar3130@gmail.com"]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = "100"
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "FORECASTED"
+    subscriber_email_addresses = ["faizan.akhtar3130@gmail.com"]
+  }
 }

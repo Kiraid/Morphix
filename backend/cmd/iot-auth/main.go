@@ -2,30 +2,38 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iot"
 )
 
-// ── ENV ──────────────────────────────────────────────────────────────
 var (
-	iotEndpoint = os.Getenv("IOT_ENDPOINT")
-	region      = os.Getenv("AWS_REGION")
+	region = os.Getenv("AWS_REGION")
 )
 
-// ── AWS CLIENTS ────────────────────────────────────────────────────────
-var (
-	iotClient *iot.Client
-)
+
+var iotClient *iot.Client
+
+
+type awsCredentials struct {
+	AccessKeyID     string
+	SecretAccessKey string
+	SessionToken    string
+}
+
+var resolvedCreds awsCredentials
 
 func init() {
 	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(region))
@@ -33,65 +41,61 @@ func init() {
 		log.Fatalf("failed to load AWS config: %v", err)
 	}
 	iotClient = iot.NewFromConfig(cfg)
+
+	creds, err := cfg.Credentials.Retrieve(context.Background())
+	if err != nil {
+		log.Fatalf("failed to retrieve AWS credentials: %v", err)
+	}
+	resolvedCreds = awsCredentials{
+		AccessKeyID:     creds.AccessKeyID,
+		SecretAccessKey: creds.SecretAccessKey,
+		SessionToken:    creds.SessionToken,
+	}
 }
 
-// ── TYPES ─────────────────────────────────────────────────────────────
 type IoTAuthResponse struct {
-	WSSURL string `json:"wss_url"`
-	Expiry int64  `json:"expiry"`
+	WSSURL   string `json:"wss_url"`
+	ClientID string `json:"client_id"`
+	Expiry   int64  `json:"expiry"`
 }
 
-// ── HANDLER ────────────────────────────────────────────────────────────
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	// CORS preflight
 	if req.HTTPMethod == http.MethodOptions {
 		return corsResponse(http.StatusOK, ""), nil
 	}
 
-	// Extract job_id from query params
 	jobID := req.QueryStringParameters["job_id"]
 	if jobID == "" {
 		return errResponse(http.StatusBadRequest, "job_id query parameter is required"), nil
 	}
 
-	// Generate a unique client ID for this session
-	clientID := fmt.Sprintf("morphix-%s-%d", jobID, time.Now().Unix())
+	clientID := fmt.Sprintf("morphix-%s-%d", jobID, time.Now().UnixMilli())
 
-	// Get IoT endpoint URL if not provided in env
-	endpoint := iotEndpoint
-	if endpoint == "" {
-		// Fallback: construct from region
-		endpoint = fmt.Sprintf("https://%s.iot.%s.amazonaws.com", getIoTDomain(), region)
-	}
 
-	// Create IoT credentials for WebSocket connection
-	input := &iot.DescribeEndpointInput{
-		EndpointType: "iot:Data-ATS",
-	}
-
-	desc, err := iotClient.DescribeEndpoint(ctx, input)
+	desc, err := iotClient.DescribeEndpoint(ctx, &iot.DescribeEndpointInput{
+		EndpointType: strPtr("iot:Data-ATS"),
+	})
 	if err != nil {
-		log.Printf("failed to describe IoT endpoint: %v", err)
+		log.Printf("DescribeEndpoint error: %v", err)
 		return errResponse(http.StatusInternalServerError, "failed to get IoT endpoint"), nil
 	}
 
-	// Build WebSocket URL with credentials
-	wssURL := fmt.Sprintf("wss://%s/mqtt?X-Amz-Security-Token=%s&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=%s&X-Amz-Date=%s&X-Amz-SignedHeaders=host&X-Amz-Signature=%s",
-		desc.EndpointAddress,
-		"", // Token would be generated here in production
-		"", // Credential would be generated here
-		time.Now().UTC().Format("20060102T150405Z"),
-		"", // Signature would be generated here
-	)
+	endpoint := *desc.EndpointAddress
 
-	// For simplicity, we'll return the basic endpoint URL
-	// In production, you'd generate proper AWS SigV4 signed URL
-	response := IoTAuthResponse{
-		WSSURL: fmt.Sprintf("wss://%s/mqtt", desc.EndpointAddress),
+
+	wssURL, err := signIoTWebSocketURL(endpoint, region, resolvedCreds)
+	if err != nil {
+		log.Printf("SigV4 signing error: %v", err)
+		return errResponse(http.StatusInternalServerError, "failed to sign IoT URL"), nil
+	}
+
+	resp := IoTAuthResponse{
+		WSSURL:   wssURL,
+		ClientID: clientID,
 		Expiry: time.Now().Add(1 * time.Hour).Unix(),
 	}
 
-	body, _ := json.Marshal(response)
+	body, _ := json.Marshal(resp)
 	return events.APIGatewayProxyResponse{
 		StatusCode: http.StatusOK,
 		Headers:    corsHeaders(),
@@ -99,21 +103,114 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	}, nil
 }
 
-// ── HELPERS ─────────────────────────────────────────────────────────────
-func getIoTDomain() string {
-	// IoT domain format varies by region
-	domainMap := map[string]string{
-		"us-east-1":     "a3jmfq8w7p7i5j",
-		"us-west-2":     "a2f1x1r0s9y5j4",
-		"eu-west-1":     "a2p1r0s9t8y7j6",
-		"ap-southeast-1": "a1b2c3d4e5f6g7",
+
+func signIoTWebSocketURL(endpoint, awsRegion string, creds awsCredentials) (string, error) {
+	now := time.Now().UTC()
+	datestamp := now.Format("20060102")         // YYYYMMDD
+	datetimestamp := now.Format("20060102T150405Z") // YYYYMMDDTHHmmssZ
+
+	service := "iotdevicegateway"
+	algorithm := "AWS4-HMAC-SHA256"
+	credentialScope := strings.Join([]string{datestamp, awsRegion, service, "aws4_request"}, "/")
+	credential := creds.AccessKeyID + "/" + credentialScope
+
+	queryParams := []string{
+		"X-Amz-Algorithm=" + algorithm,
+		"X-Amz-Credential=" + urlEncode(credential),
+		"X-Amz-Date=" + datetimestamp,
+		"X-Amz-Expires=3600",
+		"X-Amz-SignedHeaders=host",
 	}
-	
-	if domain, ok := domainMap[region]; ok {
-		return domain
+	if creds.SessionToken != "" {
+		queryParams = append(queryParams, "X-Amz-Security-Token="+urlEncode(creds.SessionToken))
 	}
-	return "iot" // fallback
+
+	sortStrings(queryParams)
+	canonicalQueryString := strings.Join(queryParams, "&")
+
+
+	canonicalURI := "/mqtt"
+	canonicalHeaders := "host:" + endpoint + "\n"
+	signedHeaders := "host"
+
+	payloadHash := sha256Hex("")
+
+	canonicalRequest := strings.Join([]string{
+		"GET",
+		canonicalURI,
+		canonicalQueryString,
+		canonicalHeaders,
+		signedHeaders,
+		payloadHash,
+	}, "\n")
+
+	stringToSign := strings.Join([]string{
+		algorithm,
+		datetimestamp,
+		credentialScope,
+		sha256Hex(canonicalRequest),
+	}, "\n")
+
+
+	signingKey := deriveSigningKey(creds.SecretAccessKey, datestamp, awsRegion, service)
+
+	signature := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
+
+	finalQuery := canonicalQueryString + "&X-Amz-Signature=" + signature
+
+	wssURL := fmt.Sprintf("wss://%s/mqtt?%s", endpoint, finalQuery)
+	return wssURL, nil
 }
+
+
+func hmacSHA256(key []byte, data string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(data))
+	return h.Sum(nil)
+}
+
+func sha256Hex(data string) string {
+	h := sha256.New()
+	h.Write([]byte(data))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+
+func deriveSigningKey(secret, date, awsRegion, service string) []byte {
+	kDate := hmacSHA256([]byte("AWS4"+secret), date)
+	kRegion := hmacSHA256(kDate, awsRegion)
+	kService := hmacSHA256(kRegion, service)
+	kSigning := hmacSHA256(kService, "aws4_request")
+	return kSigning
+}
+
+
+func urlEncode(s string) string {
+	var b strings.Builder
+	for _, c := range s {
+		switch {
+		case c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			c >= '0' && c <= '9',
+			c == '-', c == '_', c == '.', c == '~':
+			b.WriteRune(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
 
 func corsHeaders() map[string]string {
 	return map[string]string{

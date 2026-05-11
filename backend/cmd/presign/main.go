@@ -21,14 +21,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// ── ENV ──────────────────────────────────────────────────────────────
 var (
 	bucketName = os.Getenv("S3_BUCKET")
 	ddbTable   = os.Getenv("DDB_TABLE")
 	region     = os.Getenv("AWS_REGION")
 )
 
-// ── TYPES ─────────────────────────────────────────────────────────────
 type FileInfo struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
@@ -51,7 +49,7 @@ type PresignResponse struct {
 	ExpiresIn  int         `json:"expires_in_seconds"`
 }
 
-// ── ALLOWED FORMATS ───────────────────────────────────────────────────
+// ALLOWED FORMATS 
 var allowedOutputFormats = map[string]bool{
 	"JPEG": true, "JPG": true, "PNG": true, "WEBP": true,
 	"AVIF": true, "BMP": true, "TIFF": true, "GIF": true,
@@ -68,7 +66,7 @@ const (
 	urlExpiry = 10 * time.Minute
 )
 
-// ── AWS CLIENTS ────────────────────────────────────────────────────────
+// AWS CLIENTS
 var (
 	s3Client        *s3.Client
 	s3PresignClient *s3.PresignClient
@@ -85,7 +83,7 @@ func init() {
 	ddbClient = dynamodb.NewFromConfig(cfg)
 }
 
-// ── HANDLER ────────────────────────────────────────────────────────────
+// HANDLER
 func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	// CORS preflight
 	if req.HTTPMethod == http.MethodOptions {
@@ -113,7 +111,6 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 			Key:           aws.String(key),
 			ContentType:   aws.String(f.Type),
 			ContentLength: aws.Int64(f.Size),
-			// tag it so lifecycle policy can target uploads/ prefix
 			Tagging: aws.String("morphix=true"),
 		}, s3.WithPresignExpires(urlExpiry))
 		if err != nil {
@@ -160,7 +157,7 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 	}, nil
 }
 
-// ── VALIDATION ─────────────────────────────────────────────────────────
+// VALIDATION 
 func validate(req PresignRequest) error {
 	if len(req.Files) == 0 {
 		return fmt.Errorf("no files provided")
@@ -183,7 +180,7 @@ func validate(req PresignRequest) error {
 	return nil
 }
 
-// ── HELPERS ─────────────────────────────────────────────────────────────
+// HELPERS 
 func fileNames(files []FileInfo) []string {
 	names := make([]string, len(files))
 	for i, f := range files {
@@ -210,24 +207,12 @@ func errResponse(code int, msg string) events.APIGatewayProxyResponse {
 	return events.APIGatewayProxyResponse{StatusCode: code, Headers: corsHeaders(), Body: string(b)}
 }
 
-// ── ENSURE S3 BUCKET CORS (called once at deploy via Terraform) ────────
-// This is handled in Terraform, not here.
 
-// ── CORS CONFIGURATION NOTE ────────────────────────────────────────────
-// The S3 bucket needs a CORS rule allowing PUT from the CloudFront domain.
-// This is configured in Terraform s3 module.
 
 func main() {
 	lambda.Start(handler)
 }
 
-// ── IOT AUTH HANDLER (same Lambda, different path via API GW) ──────────
-// Returns a pre-signed WSS URL for IoT Core WebSocket connection.
-// The client uses this to connect directly to IoT Core MQTT over WebSockets.
-// Implemented as a separate path /iot-auth?job_id=xxx
-// See: https://docs.aws.amazon.com/iot/latest/developerguide/mqtt-ws.html
-//
-// For simplicity in this Lambda we handle both /presign and /iot-auth routes.
-// In production you might split these.
 
-var _ s3types.ObjectCannedACL // suppress import
+
+var _ s3types.ObjectCannedACL 

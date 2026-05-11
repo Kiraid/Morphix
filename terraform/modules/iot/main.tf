@@ -1,7 +1,7 @@
 variable "name_prefix" {}
 variable "tags"        { type = map(string) }
 
-# IoT Core policy allowing frontend clients to subscribe/receive
+# IoT Core policy allowing frontend clients to subscribe
 resource "aws_iot_policy" "frontend" {
   name = "${var.name_prefix}-frontend-policy"
 
@@ -27,7 +27,7 @@ resource "aws_iot_policy" "frontend" {
   })
 }
 
-# Get the IoT endpoint (ATS)
+# Get the IoT endpoint 
 data "aws_iot_endpoint" "main" {
   endpoint_type = "iot:Data-ATS"
 }

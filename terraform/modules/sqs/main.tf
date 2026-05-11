@@ -1,22 +1,22 @@
 variable "name_prefix" {}
 variable "tags"        { type = map(string) }
 
-# Dead Letter Queue for failed conversions
+# Dead Letter Queue 
 resource "aws_sqs_queue" "dlq" {
   name                      = "${var.name_prefix}-processor-dlq"
-  message_retention_seconds = 86400 * 3 # 3 days
+  message_retention_seconds = 86400 * 3 
   tags                      = var.tags
 }
 
 resource "aws_sqs_queue" "main" {
   name                       = "${var.name_prefix}-processor-queue"
-  visibility_timeout_seconds = 300  # 5 min — Lambda timeout is 5 min
-  message_retention_seconds  = 3600 # 1 hour
-  delay_seconds              = 5    # Small delay to let all files finish uploading
+  visibility_timeout_seconds = 300  
+  message_retention_seconds  = 3600 
+  delay_seconds              = 5    
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dlq.arn
-    maxReceiveCount     = 3 # retry 3 times before DLQ
+    maxReceiveCount     = 3 
   })
 
   tags = var.tags

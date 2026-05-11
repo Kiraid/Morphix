@@ -3,7 +3,7 @@ variable "bucket_name"    {}
 variable "bucket_domain"  {}
 variable "tags"           { type = map(string) }
 
-# Origin Access Control (OAC) — modern replacement for OAI
+# Origin Access Control 
 resource "aws_cloudfront_origin_access_control" "main" {
   name                              = "${var.name_prefix}-oac"
   description                       = "OAC for Morphix S3 bucket"
@@ -17,6 +17,7 @@ resource "aws_cloudfront_distribution" "main" {
   is_ipv6_enabled     = true
   default_root_object = "index.html"
   comment             = "${var.name_prefix} distribution"
+  price_class         = "PriceClass_200" 
   tags                = var.tags
 
   origin {
@@ -37,13 +38,12 @@ resource "aws_cloudfront_distribution" "main" {
       cookies { forward = "none" }
     }
 
-    # Frontend assets: cache 1 hour; HTML: 60s for quick redeploys
     min_ttl     = 0
     default_ttl = 3600
     max_ttl     = 86400
   }
 
-  # Don't cache HTML — allows quick updates
+
   ordered_cache_behavior {
     path_pattern           = "*.html"
     target_origin_id       = "s3-${var.bucket_name}"
@@ -82,10 +82,6 @@ resource "aws_cloudfront_distribution" "main" {
 
   viewer_certificate {
     cloudfront_default_certificate = true
-    # Phase 2: switch to ACM cert for custom domain
-    # acm_certificate_arn      = var.acm_cert_arn
-    # ssl_support_method       = "sni-only"
-    # minimum_protocol_version = "TLSv1.2_2021"
   }
 }
 

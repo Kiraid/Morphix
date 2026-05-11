@@ -8,11 +8,11 @@ resource "aws_ecr_repository" "processor" {
   tags                 = var.tags
 
   image_scanning_configuration {
-    scan_on_push = true # Security scanning on every push
+    scan_on_push = true 
   }
 }
 
-# Keep only the last 5 images to save storage costs
+# Keep only the last 5 images 
 resource "aws_ecr_lifecycle_policy" "processor" {
   repository = aws_ecr_repository.processor.name
 
