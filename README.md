@@ -44,7 +44,7 @@ Browser (CloudFront URL)
 | S3 | File storage (uploads + converted), static site hosting |
 | CloudFront + OAC | CDN, HTTPS, blocks direct S3 access |
 | API Gateway | REST API for presign + status + IoT auth |
-| Lambda (Go, zip) | Presign URL generation, status polling, IoT auth |
+| Lambda (Go, zip) | Presign URL generation, IoT auth |
 | Lambda (Go, Docker/ECR) | Image conversion with FFmpeg in goroutines |
 | SQS | Decoupling S3 events from Lambda, buffering, retry/DLQ |
 | IoT Core (MQTT) | Real-time push notification to browser |
