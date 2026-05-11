@@ -1,4 +1,4 @@
- // Configurations
+
  const CONFIG = {
     API_BASE:        window.MORPHIX_API_BASE = "{{API_BASE_URL}}",
     IOT_ENDPOINT:    window.MORPHIX_IOT_ENDPOINT = "{{IOT_ENDPOINT_URL}}",

@@ -1,5 +1,6 @@
 # Morphix deploy: path-aware builds, Terraform plan → manual approval → apply,
 # and independent frontend sync + CloudFront invalidation.
+
 name: Deploy Morphix
 
 on:
@@ -48,8 +49,8 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       go_deps: ${{ steps.filter.outputs.go_deps }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -79,7 +80,7 @@ jobs:
       needs.detect.outputs.go_deps == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -178,7 +179,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -211,7 +212,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' && github.event.inputs.sync_frontend == 'true')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
