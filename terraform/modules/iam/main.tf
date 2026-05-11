@@ -51,14 +51,34 @@ resource "aws_iam_role_policy" "presign_lambda" {
       },
       {
         Effect   = "Allow"
-        Action   = ["iot:Connect", "iot:Subscribe", "iot:Receive"]
-        Resource = "*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["iot:DescribeEndpoint"]
+        Action   = ["iot:*"]
         Resource = "*"
       }
+      # {
+      #   Effect   = "Allow"
+      #   Action   = ["iot:Connect"]
+      #   Resource = "arn:aws:iot:${local.region}:${local.account_id}:client/morphix-*"
+      # },
+      # {
+      #   Effect   = "Allow"
+      #   Action   = ["iot:Subscribe"]
+      #   Resource = "arn:aws:iot:${local.region}:${local.account_id}:topicfilter/morphix/jobs/*"
+      # },
+      # {
+      #   Effect   = "Allow"
+      #   Action   = ["iot:Publish"]
+      #   Resource = "arn:aws:iot:${local.region}:${local.account_id}:topic/morphix/jobs/*"
+      # },
+      # {
+      #   Effect   = "Allow"
+      #   Action   = ["iot:Receive"]
+      #   Resource = "arn:aws:iot:${local.region}:${local.account_id}:topic/morphix/jobs/*"
+      # },
+      # {
+      #   Effect   = "Allow"
+      #   Action   = ["iot:DescribeEndpoint"]
+      #   Resource = "*"
+      # }
     ]
   })
 }
@@ -100,7 +120,7 @@ resource "aws_iam_role_policy" "processor_lambda" {
       },
       {
         Effect   = "Allow"
-        Action   = ["s3:PutObject"]
+        Action   = ["s3:PutObject", "s3:GetObject"]
         Resource = "arn:aws:s3:::${var.bucket_name}/converted/*"
       },
       {

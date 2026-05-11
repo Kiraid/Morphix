@@ -1,167 +1,127 @@
 # Morphix — Serverless Image Converter
 
-> Convert images between 10+ formats instantly. No accounts, no watermarks. Files auto-deleted after 24 hours.
+Convert images between many formats in the browser: no accounts, no watermarks, and objects are removed automatically after the configured retention window.
 
-**Tech stack:** Go · AWS Lambda · S3 · CloudFront · SQS · IoT Core · DynamoDB · ECR · Terraform · FFmpeg · Docker
+**Stack:** Go · AWS Lambda (zip + container) · API Gateway HTTP · S3 · CloudFront · SQS · IoT Core · DynamoDB · ECR · Terraform · FFmpeg · Docker
 
 ---
 
 ## Architecture
 
 ```
-Browser (CloudFront URL)
+Browser (CloudFront)
     │
-    │  1. POST /presign  →  [API Gateway]  →  [Presign Lambda (Go)]
-    │     ← request_id + presigned S3 PUT URLs
+    │  POST /presign  →  API Gateway  →  Presign Lambda (Go, zip)
+    │       ← request_id + presigned S3 PUT URLs
     │
-    │  2. PUT files directly → [S3: uploads/{request_id}/]
+    │  PUT files  →  S3 uploads/{request_id}/
     │
-    │  3. Subscribe WSS → [IoT Core MQTT topic: morphix/jobs/{request_id}]
+    │  MQTT over WSS  ←  IoT Core topic morphix/jobs/{request_id}
+    │       (CONNECT uses client_id from POST /iot-auth signed URL)
     │
-    │                    S3 ObjectCreated event
-    │                         ↓
-    │                      [SQS Queue]  (5s delay, DLQ after 3 retries)
-    │                         ↓
-    │              [Processor Lambda (Go + FFmpeg, Docker/ECR)]
-    │                ├── Goroutine: download + convert image 1
-    │                ├── Goroutine: download + convert image 2
-    │                ├── ...parallel (semaphore: 4 concurrent)
-    │                ├── Build ZIP
-    │                ├── Upload to S3: converted/{request_id}/result.zip
-    │                ├── Update DynamoDB: status=DONE, download_url=...
-    │                └── Publish to IoT Core → topic: morphix/jobs/{request_id}
+    │  S3 ObjectCreated → SQS (delay + DLQ) → Processor Lambda (Go + FFmpeg, container)
+    │       → converted ZIP + DynamoDB + publish completion on IoT
     │
-    │  4. IoT MQTT message received → show download button
-    │     ← presigned S3 GET URL (24h expiry)
+    │  Frontend receives job-done payload → presigned GET → download
     │
-    [S3 Lifecycle Policy: delete uploads/ + converted/ after 24h]
+    S3 lifecycle deletes uploads + converted after retention_days
 ```
 
-### AWS Services Used
+### AWS services
 
-| Service | Purpose |
-|---|---|
-| S3 | File storage (uploads + converted), static site hosting |
-| CloudFront + OAC | CDN, HTTPS, blocks direct S3 access |
-| API Gateway | REST API for presign + status + IoT auth |
-| Lambda (Go, zip) | Presign URL generation, IoT auth |
-| Lambda (Go, Docker/ECR) | Image conversion with FFmpeg in goroutines |
-| SQS | Decoupling S3 events from Lambda, buffering, retry/DLQ |
-| IoT Core (MQTT) | Real-time push notification to browser |
-| DynamoDB | Job state tracking with TTL auto-cleanup |
-| ECR | Docker image registry for processor Lambda |
-| CloudWatch | Lambda logs, metrics |
-| Terraform | Full IaC for all resources |
+| Service | Role |
+|--------|------|
+| S3 + CloudFront (OAC) | Static UI, uploads, converted ZIPs; no public bucket browsing |
+| API Gateway | `POST /presign`, `POST /iot-auth` |
+| Lambda (provided.al2023) | Presign + IoT custom-authorizer style URL helper |
+| Lambda (container / ECR) | FFmpeg conversion, parallel goroutines, ZIP, IoT publish |
+| SQS | Buffer S3 notifications, retries, DLQ |
+| IoT Core | Push job status to the browser over MQTT |
+| DynamoDB | Job metadata + TTL cleanup |
+| Terraform | Full IaC |
 
 ---
 
-## Project Structure
+## Repo layout
 
 ```
 morphix/
-├── frontend/
-│   ├── index.html       # Static site
-│   ├── style.css        # Full design system
-│   └── app.js           # Upload flow, MQTT, presigned URLs
-│
+├── frontend/           # Static site (HTML/CSS/JS)
 ├── backend/
-│   ├── cmd/
-│   │   ├── presign/     # Lambda: generates presigned URLs, stores job in DDB
-│   │   ├── processor/   # Lambda: FFmpeg conversion, ZIP, IoT notification
-│   │   ├── status/      # Lambda: polling fallback (GET /status/{id})
-│   │   └── iot-auth/    # Lambda: returns signed WSS URL for IoT Core
-│   ├── Dockerfile       # Multi-stage: Go build + FFmpeg static binary
-│   └── go.mod
-│
-└── terraform/
-    ├── main.tf          # Root module — wires everything
-    ├── variables.tf
-    ├── outputs.tf
-    └── modules/
-        ├── s3/          # Bucket, lifecycle, CORS, OAC policy
-        ├── cloudfront/  # Distribution, OAC, cache behaviors
-        ├── lambda/      # All 4 Lambda functions
-        ├── api-gateway/ # REST API with CORS
-        ├── sqs/         # Queue + DLQ
-        ├── iot/         # IoT policy + endpoint
-        ├── dynamodb/    # Jobs table with TTL
-        ├── ecr/         # Container registry
-        └── iam/         # Least-privilege roles for each Lambda
+│   ├── cmd/presign/    # Presigned URLs + job row in DynamoDB
+│   ├── cmd/iot-auth/   # SigV4-aligned presigned WSS URL for IoT
+│   ├── cmd/processor/  # SQS consumer: convert, zip, notify
+│   ├── Dockerfile      # Processor image (bootstrap at /var/runtime/bootstrap)
+│   └── go.mod          # Go 1.26
+├── terraform/          # Root module + modules (s3, cloudfront, lambda, …)
+├── scripts/
+│   └── ci-frontend-inject.sh   # Patch CONFIG in app.js from terraform output
+└── Makefile            # Local build / tf / frontend helpers
 ```
 
 ---
 
-## Quick Start
+## Prerequisites
 
-### Prerequisites
-- AWS CLI configured (`aws configure`)
-- Terraform >= 1.7
-- Go >= 1.22
-- Docker
+- AWS CLI configured for the account that holds state and workloads
+- Terraform `>= 1.7`
+- Go **1.26** (see `backend/go.mod`)
+- Docker (for the processor image)
 
-### Deploy
+---
+
+## Local deploy (happy path)
 
 ```bash
-# 1. Initialize Terraform
 make tf-init
-
-# 2. Build Lambda binaries + Docker image
-make build-lambdas build-docker
-
-# 3. Provision AWS infrastructure
-make tf-apply
-
-# 4. Push Docker image to ECR
-make push-docker
-
-# 5. Deploy frontend to S3
-make frontend-deploy
+make build-lambdas
+make build-docker
+make tf-apply          # creates ECR among other resources
+make push-docker       # push :latest so Terraform can resolve digest
+make tf-apply          # pick up new ECR image digest + any code changes
+make frontend-deploy   # inject URLs from outputs, sync S3, invalidate CloudFront
 ```
 
-### Tear down
-```bash
-make tf-destroy
-```
+Tear down: `make tf-destroy`
 
-### Tail logs
-```bash
-make logs-processor   # watch FFmpeg conversions live
-make logs-presign     # watch presign Lambda
-```
+Logs: `make logs-presign`, `make logs-iot-auth`, `make logs-processor`
 
 ---
 
-## Supported Formats
+## How the important pieces work
 
-**Input:** JPG, PNG, WEBP, GIF, BMP, TIFF, AVIF, HEIC, HEIF  
-**Output:** JPEG, PNG, WEBP, AVIF, BMP, TIFF, GIF
+**Presigned PUT** — The API never receives file bytes; the browser uploads straight to S3, avoiding API Gateway payload limits.
 
----
+**SQS in front of the processor** — A short queue delay lets parallel PUTs land before conversion starts; failed invokes can retry before the DLQ.
 
-## Key Design Decisions
+**Parallel FFmpeg** — The processor downloads and converts with bounded concurrency so a single Lambda invocation can handle multi-file jobs without thrashing.
 
-**Direct S3 upload via presigned URLs** — Files never pass through API Gateway (10MB body limit). Browser uploads directly to S3. Presigned URLs are generated only on Convert click, not page load, to keep the expiry window tight.
+**IoT instead of polling** — The UI subscribes to `morphix/jobs/{request_id}` before uploading so it does not miss the completion message. `/iot-auth` returns a SigV4-signed WebSocket URL compatible with AWS IoT expectations.
 
-**SQS between S3 and Lambda** — A 5-second SQS `DelaySeconds` gives all parallel uploads time to land before the processor starts. `maxReceiveCount: 3` retries failed conversions before routing to the DLQ.
-
-**File count check before processing** — The processor Lambda verifies that the number of objects in the S3 prefix matches the expected count from DynamoDB before starting conversion. If not all files have arrived yet, it returns an error and SQS retries.
-
-**Goroutines for parallel conversion** — Each image is downloaded and converted concurrently with a semaphore limiting max 4 FFmpeg processes to avoid Lambda CPU thrashing.
-
-**IoT Core MQTT for real-time notifications** — The processor publishes to `morphix/jobs/{request_id}`. The frontend subscribes before uploading, so it never misses the completion event. A polling fallback (`GET /status/{id}`) handles IoT connection failures.
-
-**DynamoDB TTL** — Job records are auto-deleted 24 hours after creation. S3 lifecycle policies handle file cleanup independently.
+**Immutable deploys for the container** — Terraform pins the processor Lambda to an **ECR image digest** (via `aws_ecr_image`), so pushing a new `:latest` and re-applying rolls the function reliably.
 
 ---
 
-## Phase 2 Roadmap
+## CI/CD (GitHub Actions)
 
-- [ ] Custom domain via Route 53 + ACM (adds `aws_route53_record`, `aws_acm_certificate`)
-- [ ] Cognito user pool — accounts, rate limiting (5 files anon / 10 files logged in)
-- [ ] CloudWatch dashboard — Lambda duration, S3 PUT count, error rate
-- [ ] WAF on CloudFront — IP rate limiting, geo-blocking
-- [ ] GitHub Actions CI/CD — auto-build and deploy on push to main
+On push to `main` (filtered paths), `.github/workflows/deploy.yml`:
+
+1. **Detect** which areas changed (`presign`, `iot-auth`, `processor`, `go` deps, `terraform`, `frontend`).
+2. **infra-plan** — Build zip Lambdas into `backend/dist/…`; if processor or Go deps changed, build and push the Docker image to ECR; run `terraform plan` and upload the plan artifact; post a text summary to the job summary.
+3. **infra-apply** — Runs only after **manual approval** on the GitHub Environment named `production` (configure reviewers under *Settings → Environments*). Applies the saved plan with `terraform apply tfplan`.
+4. **deploy-frontend** — If `frontend/**` changed, runs independently: `terraform init` for outputs, `scripts/ci-frontend-inject.sh`, `aws s3 sync`, CloudFront invalidation.
+
+Optional repo **variable** `MORPHIX_TERRAFORM_ENV` (`dev` / `staging` / `prod`). **Run workflow** from the Actions tab lets you set `terraform_environment`, optionally **sync frontend** without a commit under `frontend/`, and optionally **rebuild the processor image** on a manual run.
 
 ---
 
-*Built by Faizan Akhtar · [GitHub](https://github.com/faizan-akhtar)*
+## Roadmap ideas
+
+- Custom domain (Route 53 + ACM)
+- Cognito for authenticated tiers and abuse controls
+- CloudWatch dashboard + alarms
+- WAF in front of CloudFront
+
+---
+
+*Faizan Akhtar · [GitHub](https://github.com/faizan-akhtar)*

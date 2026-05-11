@@ -7,15 +7,17 @@ variable "sqs_queue_url"        {}
 variable "iot_endpoint"         {}
 variable "presign_role_arn"     {}
 variable "processor_role_arn"   {}
-variable "ecr_image_uri"        {}
+variable "ecr_repository_url"   {}
+variable "ecr_repository_name"  {}
+variable "ecr_image_tag"        { default = "latest" }
 variable "aws_region"           {}
 variable "tags"                 { type = map(string) }
 
 # PRESIGN LAMBDA (Go binary, zip deployment)
 data "archive_file" "presign" {
   type        = "zip"
-  source_file = "${path.module}/../../../../backend/dist/presign/bootstrap"
-  output_path = "${path.module}/dist/presign.zip"
+  source_file = "${path.module}/../../../backend/dist/presign/bootstrap"
+  output_path = "${path.module}/../../../backend/dist/presign.zip"
 }
 
 resource "aws_lambda_function" "presign" {
@@ -32,7 +34,6 @@ resource "aws_lambda_function" "presign" {
     variables = {
       S3_BUCKET  = var.bucket_name
       DDB_TABLE  = var.ddb_table
-      AWS_REGION = var.aws_region
     }
   }
 
@@ -40,11 +41,18 @@ resource "aws_lambda_function" "presign" {
 }
 
 # PROCESSOR LAMBDA (Docker image from ECR)
+data "aws_ecr_image" "processor" {
+  repository_name = var.ecr_repository_name
+  image_tag       = var.ecr_image_tag
+}
+
 resource "aws_lambda_function" "processor" {
   function_name = "${var.name_prefix}-processor"
   role          = var.processor_role_arn
   package_type  = "Image"
-  image_uri     = var.ecr_image_uri
+  # Pin to an immutable digest so Terraform detects new pushes,
+  # even if you keep using the mutable :latest tag.
+  image_uri     = "${var.ecr_repository_url}@${data.aws_ecr_image.processor.image_digest}"
   timeout       = 300  
   memory_size   = 3008 
 
@@ -53,7 +61,6 @@ resource "aws_lambda_function" "processor" {
       S3_BUCKET    = var.bucket_name
       DDB_TABLE    = var.ddb_table
       IOT_ENDPOINT = "https://${var.iot_endpoint}"
-      AWS_REGION   = var.aws_region
     }
   }
 
@@ -75,8 +82,8 @@ resource "aws_lambda_event_source_mapping" "sqs_trigger" {
 # IOT AUTH LAMBDA 
 data "archive_file" "iot_auth" {
   type        = "zip"
-  source_file = "${path.module}/../../../../backend/dist/iot-auth/bootstrap"
-  output_path = "${path.module}/dist/iot-auth.zip"
+  source_file = "${path.module}/../../../backend/dist/iot-auth/bootstrap"
+  output_path = "${path.module}/../../../backend/dist/iot-auth.zip"
 }
 
 resource "aws_lambda_function" "iot_auth" {
@@ -92,7 +99,6 @@ resource "aws_lambda_function" "iot_auth" {
   environment {
     variables = {
       IOT_ENDPOINT = var.iot_endpoint
-      AWS_REGION   = var.aws_region
     }
   }
 

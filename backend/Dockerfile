@@ -1,5 +1,5 @@
 #STAGE 1: Build Go binary 
-FROM golang:1.22-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 WORKDIR /app
 
@@ -31,7 +31,8 @@ RUN dnf install -y tar xz && \
     dnf clean all
 
 # Copy binary from builder
-COPY --from=builder /bin/processor ${LAMBDA_TASK_ROOT}/processor
+COPY --from=builder /bin/processor /var/runtime/bootstrap
+RUN chmod +x /var/runtime/bootstrap
 
-# Lambda handler is the binary name
-CMD ["processor"]
+# Handler name is ignored for custom runtimes; keep a harmless default.
+CMD ["bootstrap"]

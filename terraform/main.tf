@@ -11,20 +11,14 @@ terraform {
       version = "~> 3.6"
     }
   }
+  backend "s3" {
+    bucket       = "morphix-dev-terraform-state"
+    key          = "morphix/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true
+  }
+}
 
-  # Uncomment to use S3 backend (recommended for real deployments)
-  # backend "s3" {
-  #   bucket = "your-terraform-state-bucket"
-  #   key    = "morphix/terraform.tfstate"
-  #   region = "us-east-1"
-  # }
-}
-variable "aws_region" {
-  
-}
-variable "environment" {
-  
-}
 provider "aws" {
   region = var.aws_region
 }
@@ -61,20 +55,20 @@ module "iam" {
 }
 
 module "s3" {
-  source        = "./modules/s3"
-  bucket_name   = local.bucket_name
-  name_prefix   = local.name_prefix
-  cf_arn        = module.cloudfront.oac_arn
+  source         = "./modules/s3"
+  bucket_name    = local.bucket_name
+  name_prefix    = local.name_prefix
+  cf_arn         = module.cloudfront.oac_arn
   retention_days = var.file_retention_days
-  tags          = local.tags
+  tags           = local.tags
 }
 
 module "cloudfront" {
-  source      = "./modules/cloudfront"
-  name_prefix = local.name_prefix
-  bucket_name = local.bucket_name
+  source        = "./modules/cloudfront"
+  name_prefix   = local.name_prefix
+  bucket_name   = local.bucket_name
   bucket_domain = module.s3.bucket_regional_domain
-  tags        = local.tags
+  tags          = local.tags
 }
 
 module "dynamodb" {
@@ -100,20 +94,22 @@ module "lambda" {
   iot_endpoint        = module.iot.endpoint
   presign_role_arn    = module.iam.presign_lambda_role_arn
   processor_role_arn  = module.iam.processor_lambda_role_arn
-  ecr_image_uri       = module.ecr.processor_image_uri
+  ecr_repository_url  = module.ecr.repository_url
+  ecr_repository_name = module.ecr.repository_name
+  ecr_image_tag       = "latest"
   aws_region          = var.aws_region
   tags                = local.tags
 }
 
 module "api_gateway" {
-  source              = "./modules/api-gateway"
-  name_prefix         = local.name_prefix
-  presign_lambda_arn  = module.lambda.presign_lambda_arn
-  presign_lambda_name = module.lambda.presign_lambda_name
-  iot_auth_lambda_arn = module.lambda.iot_auth_lambda_arn
+  source               = "./modules/api-gateway"
+  name_prefix          = local.name_prefix
+  presign_lambda_arn   = module.lambda.presign_lambda_arn
+  presign_lambda_name  = module.lambda.presign_lambda_name
+  iot_auth_lambda_arn  = module.lambda.iot_auth_lambda_arn
   iot_auth_lambda_name = module.lambda.iot_auth_lambda_name
-  aws_region          = var.aws_region
-  tags                = local.tags
+  aws_region           = var.aws_region
+  tags                 = local.tags
 }
 
 module "iot" {

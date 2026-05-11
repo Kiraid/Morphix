@@ -1,186 +1,253 @@
-# name: Deploy Morphix
-# on:
-#   push:
-#     branches: [main]
-#     paths:
-#       - 'backend/**'
-#       - 'terraform/**' 
-#       - 'frontend/**'
+# Morphix deploy: path-aware builds, Terraform plan → manual approval → apply,
+# and independent frontend sync + CloudFront invalidation.
+name: Deploy Morphix
 
-# jobs:
-#   detect-changes:
-#     runs-on: ubuntu-latest
-#     outputs:
-#       presign-changed: ${{ steps.changes.outputs.presign }}
-#       iot-auth-changed: ${{ steps.changes.outputs.iot-auth }}
-#       processor-changed: ${{ steps.changes.outputs.processor }}
-#       terraform-changed: ${{ steps.changes.outputs.terraform }}
-#       frontend-changed: ${{ steps.changes.outputs.frontend }}
-    
-#     steps:
-#       - uses: actions/checkout@v3
-#       - uses: dorny/paths-filter@v2
-#         id: changes
-#         with:
-#           filters: |
-#             backend/cmd/presign:
-#               - 'backend/cmd/presign/**'
-#             backend/cmd/iot-auth:
-#               - 'backend/cmd/iot-auth/**'
-#             backend/cmd/processor:
-#               - 'backend/cmd/processor/**'
-#             terraform:
-#               - 'terraform/**'
-#             frontend:
-#               - 'frontend/**'
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "terraform/**"
+      - "frontend/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      terraform_environment:
+        description: "Terraform var.environment (dev | staging | prod)"
+        required: false
+        default: dev
+      sync_frontend:
+        description: "Deploy frontend from Terraform outputs (even if frontend/ did not change)"
+        type: boolean
+        required: false
+        default: false
+      rebuild_processor_image:
+        description: "On manual run only: build and push the processor Docker image to ECR"
+        type: boolean
+        required: false
+        default: false
 
-#   build-lambdas:
-#     needs: detect-changes
-#     if: needs.detect-changes.outputs.presign-changed == 'true' || needs.detect-changes.outputs.iot-auth-changed == 'true'
-#     runs-on: ubuntu-latest
-#     steps:
-#       - uses: actions/checkout@v3
-#       - uses: actions/setup-go@v4
-#         with:
-#           go-version: '1.22'
-      
-#       - name: Build Presign Lambda
-#         if: needs.detect-changes.outputs.presign-changed == 'true'
-#         run: |
-#           mkdir -p dist/presign
-#           GOOS=linux GOARCH=amd64 go build -o dist/presign/bootstrap ./cmd/presign
-#           cd dist/presign && zip -r presign.zip bootstrap
-      
-#       - name: Build IoT Auth Lambda  
-#         if: needs.detect-changes.outputs.iot-auth-changed == 'true'
-#         run: |
-#           mkdir -p dist/iot-auth
-#           GOOS=linux GOARCH=amd64 go build -o dist/iot-auth/bootstrap ./cmd/iot-auth
-#           cd dist/iot-auth && zip -r iot-auth.zip bootstrap
-      
-#       - name: Upload Lambda ZIPs
-#         uses: actions/upload-artifact@v3
-#         with:
-#           name: lambda-zips
-#           path: dist/
+concurrency:
+  group: morphix-deploy-${{ github.ref }}
+  cancel-in-progress: false
 
-#   build-image:
-#     needs: detect-changes
-#     if: needs.detect-changes.outputs.processor-changed == 'true'
-#     runs-on: ubuntu-latest
-#     steps:
-#       - uses: actions/checkout@v3
-#       - uses: docker/setup-buildx-action@v2
-      
-#       - name: Configure AWS Credentials
-#         uses: aws-actions/configure-aws-credentials@v2
-#         with:
-#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-#           aws-region: us-east-1
-      
-#       - name: Login to ECR
-#         uses: aws-actions/amazon-ecr-login@v1
-      
-#       - name: Build and Push
-#         env:
-#           ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-#           ECR_REPO: ${{ secrets.ECR_REPOSITORY }}
-#         run: |
-#           docker build -t $ECR_REGISTRY/$ECR_REPO:${{ github.sha }} ./backend
-#           docker push $ECR_REGISTRY/$ECR_REPO:${{ github.sha }}
-          
-#           docker tag $ECR_REGISTRY/$ECR_REPO:${{ github.sha }} $ECR_REGISTRY/$ECR_REPO:latest
-#           docker push $ECR_REGISTRY/$ECR_REPO:latest
+permissions:
+  contents: read
 
-#   terraform-plan:
-#     needs: [detect-changes, build-lambdas, build-image]
-#     if: needs.detect-changes.outputs.terraform-changed == 'true' || needs.detect-changes.outputs.presign-changed == 'true' || needs.detect-changes.outputs.iot-auth-changed == 'true' || needs.detect-changes.outputs.processor-changed == 'true'
-#     runs-on: ubuntu-latest
-#     steps:
-#       - uses: actions/checkout@v3
-#       - uses: actions/setup-go@v4
-#         with:
-#           go-version: '1.22'
-      
-#       - name: Download Lambda ZIPs
-#         if: needs.detect-changes.outputs.presign-changed == 'true' || needs.detect-changes.outputs.iot-auth-changed == 'true'
-#         uses: actions/download-artifact@v3
-#         with:
-#           name: lambda-zips
-#           path: terraform/dist/
-      
-#       - name: Configure AWS Credentials
-#         uses: aws-actions/configure-aws-credentials@v2
-#         with:
-#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-#           aws-region: us-east-1
-      
-#       - name: Terraform Plan
-#         run: |
-#           cd terraform
-#           terraform init
-#           IMAGE_TAG=${{ needs.detect-changes.outputs.processor-changed == 'true' && github.sha || 'latest' }
-#           terraform plan -var="processor_image_tag=$IMAGE_TAG" -out=tfplan
-      
-#       - name: Plan Summary
-#         run: |
-#           cd terraform
-#           echo "## 📋 Terraform Plan Summary" >> $GITHUB_STEP_SUMMARY
-#           terraform show -json tfplan | jq -r '.resource_changes | length' | xargs -I {} echo "- {} resources will change" >> $GITHUB_STEP_SUMMARY
-      
-#       - name: Upload Plan
-#         uses: actions/upload-artifact@v3
-#         with:
-#           name: terraform-plan
-#           path: terraform/tfplan
+env:
+  AWS_REGION: us-east-1
 
-#   terraform-apply:
-#     needs: terraform-plan
-#     runs-on: ubuntu-latest
-#     environment: production
-#     steps:
-#       - uses: actions/checkout@v3
-#       - uses: aws-actions/configure-aws-credentials@v2
-#         with:
-#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-#           aws-region: us-east-1
-      
-#       - name: Download Plan
-#         uses: actions/download-artifact@v3
-#         with:
-#           name: terraform-plan
-#           path: terraform/
-      
-#       - name: Terraform Apply
-#         run: |
-#           cd terraform
-#           terraform apply tfplan
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      presign: ${{ steps.filter.outputs.presign }}
+      iot_auth: ${{ steps.filter.outputs.iot_auth }}
+      processor: ${{ steps.filter.outputs.processor }}
+      terraform: ${{ steps.filter.outputs.terraform }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      go_deps: ${{ steps.filter.outputs.go_deps }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            presign:
+              - 'backend/cmd/presign/**'
+            iot_auth:
+              - 'backend/cmd/iot-auth/**'
+            processor:
+              - 'backend/cmd/processor/**'
+              - 'backend/Dockerfile'
+            go_deps:
+              - 'backend/go.mod'
+              - 'backend/go.sum'
+            terraform:
+              - 'terraform/**'
+            frontend:
+              - 'frontend/**'
 
-  # deploy-frontend:
-  #   needs: terraform-apply
-  #   if: needs.detect-changes.outputs.frontend-changed == 'true'
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v3
-      
-  #     - name: Configure AWS Credentials
-  #       uses: aws-actions/configure-aws-credentials@v2
-  #       with:
-  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  #         aws-region: us-east-1
-      
-  #     - name: Upload to S3
-  #       env:
-  #         S3_BUCKET: ${{ secrets.S3_BUCKET }}
-  #       run: |
-  #         aws s3 sync frontend/ s3://$S3_BUCKET/ --delete
-      
-  #     - name: CloudFront Invalidation
-  #       env:
-  #         CF_DISTRIBUTION_ID: ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }}
-  #       run: |
-  #         aws cloudfront create-invalidation --distribution-id $CF_DISTRIBUTION_ID --paths "/*"
+  infra-plan:
+    needs: detect
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      needs.detect.outputs.terraform == 'true' ||
+      needs.detect.outputs.presign == 'true' ||
+      needs.detect.outputs.iot_auth == 'true' ||
+      needs.detect.outputs.processor == 'true' ||
+      needs.detect.outputs.go_deps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Build presign + iot-auth (Terraform archive_file reads backend/dist/)
+        working-directory: backend
+        run: |
+          mkdir -p dist/presign dist/iot-auth
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/presign/bootstrap ./cmd/presign
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/iot-auth/bootstrap ./cmd/iot-auth
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Set up Docker Buildx
+        if: |
+          needs.detect.outputs.processor == 'true' ||
+          needs.detect.outputs.go_deps == 'true' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.rebuild_processor_image == 'true')
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Amazon ECR
+        if: |
+          needs.detect.outputs.processor == 'true' ||
+          needs.detect.outputs.go_deps == 'true' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.rebuild_processor_image == 'true')
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push processor image
+        if: |
+          needs.detect.outputs.processor == 'true' ||
+          needs.detect.outputs.go_deps == 'true' ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.rebuild_processor_image == 'true')
+        working-directory: backend
+        run: |
+          REPO_URL="$(terraform -chdir=../terraform output -raw ecr_repository_url)"
+          docker build -t "${REPO_URL}:${GITHUB_SHA}" .
+          docker tag "${REPO_URL}:${GITHUB_SHA}" "${REPO_URL}:latest"
+          docker push "${REPO_URL}:${GITHUB_SHA}"
+          docker push "${REPO_URL}:latest"
+
+      - name: Resolve Terraform environment
+        id: tfenv
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "terraform_environment=${{ github.event.inputs.terraform_environment }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ vars.MORPHIX_TERRAFORM_ENV }}" ]; then
+            echo "terraform_environment=${{ vars.MORPHIX_TERRAFORM_ENV }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "terraform_environment=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: |
+          terraform plan \
+            -var="environment=${{ steps.tfenv.outputs.terraform_environment }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -out=tfplan
+
+      - name: Plan summary for Actions UI
+        working-directory: terraform
+        run: |
+          {
+            echo "## Terraform plan"
+            echo "Environment: **${{ steps.tfenv.outputs.terraform_environment }}**"
+            echo ""
+            echo '```hcl'
+            terraform show -no-color tfplan | head -n 500
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: terraform/tfplan
+          if-no-files-found: error
+
+  # Manual approval is configured on the `production` environment in repo Settings.
+  infra-apply:
+    needs: infra-plan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: terraform
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: terraform apply -input=false tfplan
+
+  deploy-frontend:
+    needs: detect
+    if: |
+      needs.detect.outputs.frontend == 'true' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.sync_frontend == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Terraform init (read outputs only)
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Inject API + IoT URLs into app.js
+        run: bash scripts/ci-frontend-inject.sh
+
+      - name: Sync to S3 and invalidate CloudFront
+        run: |
+          BUCKET="$(terraform -chdir=terraform output -raw s3_bucket_name)"
+          CF_ID="$(terraform -chdir=terraform output -raw cloudfront_id)"
+          CF_URL="$(terraform -chdir=terraform output -raw cloudfront_url)"
+          aws s3 sync frontend/ "s3://${BUCKET}/" \
+            --exclude "*.DS_Store" \
+            --cache-control "public, max-age=3600" \
+            --region "${{ env.AWS_REGION }}"
+          aws s3 cp frontend/index.html "s3://${BUCKET}/index.html" \
+            --cache-control "public, max-age=60" \
+            --region "${{ env.AWS_REGION }}"
+          aws cloudfront create-invalidation \
+            --distribution-id "${CF_ID}" \
+            --paths "/index.html" "/app.js" "/style.css" "/*" \
+            --region "${{ env.AWS_REGION }}"
+          {
+            echo "## Frontend"
+            echo "Published to **${CF_URL}** (bucket \`${BUCKET}\`)."
+          } >> "$GITHUB_STEP_SUMMARY"

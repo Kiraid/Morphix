@@ -23,7 +23,7 @@ resource "aws_ecr_lifecycle_policy" "processor" {
       selection = {
         tagStatus   = "any"
         countType   = "imageCountMoreThan"
-        countNumber = 5
+        countNumber = 2
       }
       action = { type = "expire" }
     }]
@@ -31,4 +31,5 @@ resource "aws_ecr_lifecycle_policy" "processor" {
 }
 
 output "repository_url"       { value = aws_ecr_repository.processor.repository_url }
+output "repository_name"      { value = aws_ecr_repository.processor.name }
 output "processor_image_uri"  { value = "${aws_ecr_repository.processor.repository_url}:latest" }

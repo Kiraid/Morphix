@@ -1,0 +1,19 @@
+.env
+
+# Go / Lambda build artifacts
+backend/dist/
+backend/*.zip
+
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+
+
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json

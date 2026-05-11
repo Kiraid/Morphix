@@ -12,23 +12,10 @@ resource "aws_apigatewayv2_api" "main" {
   protocol_type = "HTTP"
   description   = "Morphix API"
   tags          = var.tags
-  
-}
-
-# CORS CONFIGURATION 
-resource "aws_apigatewayv2_cors_configuration" "main" {
-  api_id = aws_apigatewayv2_api.main.id
-
-  allow_origins {
-    allowed_origins = ["*"]
-  }
-  
-  allow_methods {
-    allowed_methods = ["GET", "POST", "OPTIONS", "HEAD"]
-  }
-  
-  allow_headers {
-    allowed_headers = ["Content-Type", "Authorization", "X-Amz-Date", "X-Amz-Security-Token", "X-Amz-User-Agent"]
+  cors_configuration {
+    allow_headers = ["Content-Type", "Authorization", "X-Amz-Date", "X-Amz-Security-Token", "X-Amz-User-Agent"]
+    allow_methods = ["GET", "POST", "OPTIONS", "HEAD"]
+    allow_origins = ["*"]
   }
 }
 
@@ -60,18 +47,7 @@ resource "aws_apigatewayv2_route" "iot_auth" {
   target    = "integrations/${aws_apigatewayv2_integration.iot_auth.id}"
 }
 
-# DEFAULT ROUTE (404) 
-resource "aws_apigatewayv2_route" "default" {
-  api_id    = aws_apigatewayv2_api.main.id
-  route_key = "$default"
-  target    = "integrations/${aws_apigatewayv2_integration.default.id}"
-}
 
-resource "aws_apigatewayv2_integration" "default" {
-  api_id           = aws_apigatewayv2_api.main.id
-  integration_type = "MOCK"
-  timeout_milliseconds = 5000
-}
 
 # STAGE 
 resource "aws_apigatewayv2_stage" "prod" {

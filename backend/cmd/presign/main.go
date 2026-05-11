@@ -110,8 +110,6 @@ func handler(ctx context.Context, req events.APIGatewayProxyRequest) (events.API
 			Bucket:        aws.String(bucketName),
 			Key:           aws.String(key),
 			ContentType:   aws.String(f.Type),
-			ContentLength: aws.Int64(f.Size),
-			Tagging: aws.String("morphix=true"),
 		}, s3.WithPresignExpires(urlExpiry))
 		if err != nil {
 			log.Printf("presign error for %s: %v", f.Name, err)

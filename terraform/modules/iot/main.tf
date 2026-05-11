@@ -9,23 +9,19 @@ resource "aws_iot_policy" "frontend" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = ["iot:Connect"]
-        Resource = "*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["iot:Subscribe"]
-        Resource = "arn:aws:iot:*:*:topicfilter/morphix/jobs/*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = ["iot:Receive"]
-        Resource = "arn:aws:iot:*:*:topic/morphix/jobs/*"
+        "Effect": "Allow",
+        "Action": [
+          "iot:Connect",
+          "iot:Publish",
+          "iot:Subscribe",
+          "iot:Receive"
+        ],
+        "Resource": "*"
       }
     ]
   })
 }
+
 
 # Get the IoT endpoint 
 data "aws_iot_endpoint" "main" {

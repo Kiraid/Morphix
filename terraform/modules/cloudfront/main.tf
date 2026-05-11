@@ -88,3 +88,4 @@ resource "aws_cloudfront_distribution" "main" {
 output "domain_name"  { value = aws_cloudfront_distribution.main.domain_name }
 output "distribution_id" { value = aws_cloudfront_distribution.main.id }
 output "oac_arn" { value = aws_cloudfront_distribution.main.arn }
+
