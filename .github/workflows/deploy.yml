@@ -173,6 +173,13 @@ jobs:
           path: terraform/tfplan
           if-no-files-found: error
 
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lambda-dist
+          path: backend/dist
+          if-no-files-found: error
+
   # Manual approval is configured on the `production` environment in repo Settings.
   infra-apply:
     needs: infra-plan
@@ -200,6 +207,11 @@ jobs:
         with:
           name: tfplan
           path: terraform
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lambda-dist
+          path: backend/dist
 
       - name: Terraform apply
         working-directory: terraform
