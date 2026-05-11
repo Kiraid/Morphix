@@ -64,7 +64,7 @@ morphix/
 ## Prerequisites
 
 - AWS CLI configured for the account that holds state and workloads
-- Terraform `>= 1.7`
+- Terraform `>= 1.10` (S3 backend `use_lockfile` in this repo)
 - Go **1.26** (see `backend/go.mod`)
 - Docker (for the processor image)
 

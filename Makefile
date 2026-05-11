@@ -1,5 +1,5 @@
 # Morphix — local build & deploy helpers
-# Requires: AWS CLI, Terraform (>= 1.7), Go (see backend/go.mod), Docker (for processor image)
+# Requires: AWS CLI, Terraform (>= 1.10), Go (see backend/go.mod), Docker (for processor image)
 
 REGION  ?= us-east-1
 ENV     ?= dev

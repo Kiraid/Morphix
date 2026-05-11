@@ -101,7 +101,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: 1.10.6
           terraform_wrapper: false
 
       - name: Terraform init
@@ -188,7 +188,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: 1.10.6
           terraform_wrapper: false
 
       - name: Terraform init
@@ -221,7 +221,7 @@ jobs:
 
       - uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: 1.10.6
           terraform_wrapper: false
 
       - name: Terraform init (read outputs only)

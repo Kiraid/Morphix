@@ -1,5 +1,4 @@
   const CONFIG = {
-    // We use placeholders like {{API_URL}} which are easy to target
     API_BASE:        window.MORPHIX_API_BASE = "{{API_BASE_URL}}",
     IOT_ENDPOINT:    window.MORPHIX_IOT_ENDPOINT = "{{IOT_ENDPOINT_URL}}",
     IOT_AUTH_URL:    window.MORPHIX_IOT_AUTH_URL = "{{IOT_AUTH_URL}}",

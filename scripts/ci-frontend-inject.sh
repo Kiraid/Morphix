@@ -11,8 +11,6 @@ HOST="$(terraform -chdir=terraform output -raw iot_endpoint)"
 IOT_WS="wss://${HOST}/mqtt"
 AUTH="${API}/iot-auth"
 
-# 3. Inject values using simple placeholder replacement
-# We use '#' as a delimiter because the URLs contain '/'
 echo "Injecting values into frontend/app.js..."
 sed -i \
   -e "s#{{API_BASE_URL}}#${API}#g" \
