@@ -433,7 +433,7 @@ func countFilesInPrefix(ctx context.Context, prefix string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return int(out.KeyCount), nil
+	return int(*out.KeyCount), nil
 }
 
 // DYNAMODB HELPERS 
@@ -500,7 +500,7 @@ func publishIoT(ctx context.Context, requestID string, msg IoTMessage) {
 	_, err = iotClient.Publish(ctx, &iotdataplane.PublishInput{
 		Topic:   aws.String(topic),
 		Payload: payload,
-		Qos:     aws.Int32(0),
+		Qos:     0,
 	})
 	if err != nil {
 		log.Printf("failed to publish IoT message: %v", err)
